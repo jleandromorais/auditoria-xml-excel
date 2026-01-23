@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.log
+
+# Virtualenv
+.venv/
+venv/
+
+# Build
+build/
+dist/
+*.spec
+
+# OS/Editor
+.DS_Store
+.vscode/
