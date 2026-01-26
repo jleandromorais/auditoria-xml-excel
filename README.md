@@ -1,3 +1,4 @@
+
 # 📊 Auditoria XML NF-e / CT-e x Excel
 
 Aplicação desktop em **Python** para **auditoria automática de XMLs fiscais (NF-e e CT-e)**, comparando os dados dos arquivos XML com uma planilha Excel e gerando um **relatório detalhado em XLSX**.
@@ -111,4 +112,5 @@ GitHub: @jleandromorais
 
 📄 Licença
 Projeto open-source para fins educacionais e profissionais.
+
 
