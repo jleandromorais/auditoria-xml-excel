@@ -59,9 +59,16 @@ def auditar_pasta_pai(
     if df_base.empty:
         raise RuntimeError("Não consegui carregar as abas do Excel alvo (verifique ANO_ALVO e MESES_ALVO).")
 
+    if "NF_Clean" not in df_base.columns:
+        raise RuntimeError("Coluna NF_Clean não existe no df_base. Verifique excel_loader.py.")
+
+    # Normaliza as NFs do Excel para evitar mismatch por tipo/espaço
+    df_base["NF_Clean"] = df_base["NF_Clean"].astype(str).str.strip()
+
     xmls = coletar_xmls_por_empresas(pasta_pai, empresas)
 
     relatorio: List[Dict] = []
+    notas_xml_encontradas = set()
 
     for empresa_nome, xml_path in xmls:
         nome_arquivo = os.path.basename(xml_path)
@@ -71,12 +78,14 @@ def auditar_pasta_pai(
         except Exception:
             info = None
 
+        nota_xml = str(info["Nota"]).strip() if info and info.get("Nota") else ""
+
         item: Dict = {
             "Arquivo": nome_arquivo,
             "Empresa": empresa_nome,
             "Tipo": info["Tipo"] if info else "-",
             "Mes": "-",
-            "Nota": info["Nota"] if info else "",
+            "Nota": nota_xml,
             "Vol XML": info["Vol"] if info else 0.0,
             "Bruto XML": info["Bruto"] if info else 0.0,
             "ICMS XML": info["ICMS"] if info else 0.0,
@@ -90,27 +99,33 @@ def auditar_pasta_pai(
             "COFINS Excel": 0.0,
             "Diff Vol": 0.0,
             "Diff R$": 0.0,
-            "Status": "ERRO PARSE ❌" if not info else "Ñ ENCONTRADO ⚠️",
+            "Status": "ERRO PARSE ❌" if not info else "PENDENTE",
             "Obs": "",
         }
 
         if info and info.get("Nota"):
-            match = df_base[df_base["NF_Clean"] == info["Nota"]]
+            nota = str(info["Nota"]).strip()
+            notas_xml_encontradas.add(nota)
+
+            match = df_base[df_base["NF_Clean"] == nota]
             if not match.empty:
                 row = match.iloc[0]
-                item["Mes"] = row["Mes"]
+                item["Mes"] = row.get("Mes", "-")
 
-                vol_excel = safe_float(row["Vol_Excel"])
-                liq_excel = safe_float(row["Liq_Excel"])
-                icms_excel = safe_float(row["ICMS_Excel"])
-                pis_excel = safe_float(row["PIS_Excel"])
-                cof_excel = safe_float(row["COFINS_Excel"])
+                vol_excel = safe_float(row.get("Vol_Excel", 0))
+                liq_excel = safe_float(row.get("Liq_Excel", 0))
+                icms_excel = safe_float(row.get("ICMS_Excel", 0))
+                pis_excel = safe_float(row.get("PIS_Excel", 0))
+                cof_excel = safe_float(row.get("COFINS_Excel", 0))
 
-                item["Vol Excel"] = vol_excel if vol_excel != 0 else "NÃO NO EXCEL"
+                item["Vol Excel"] = vol_excel
                 item["Liq Excel"] = liq_excel
                 item["ICMS Excel"] = icms_excel
                 item["PIS Excel"] = pis_excel
                 item["COFINS Excel"] = cof_excel
+
+                if vol_excel == 0:
+                    item["Obs"] = (item["Obs"] + " | " if item["Obs"] else "") + "Volume não encontrado no Excel."
 
                 # Ajuste do líquido (CT-e sem PIS/COFINS no XML):
                 icms = info["ICMS"]
@@ -119,7 +134,8 @@ def auditar_pasta_pai(
                 if info["Tipo"] == "CT-e" and pis == 0 and cof == 0 and (pis_excel != 0 or cof_excel != 0):
                     pis = pis_excel
                     cof = cof_excel
-                    item["Obs"] = "CT-e sem PIS/COFINS no XML; usei valores do Excel p/ calcular líquido."
+                    item["Obs"] = (item["Obs"] + " | " if item["Obs"] else "") + \
+                                  "CT-e sem PIS/COFINS no XML; usei valores do Excel p/ calcular líquido."
 
                 liq_calc = info["Bruto"] - sum(v for v in (icms, pis, cof) if 0 < v < info["Bruto"])
                 liq_calc = max(liq_calc, 0.0)
@@ -143,6 +159,57 @@ def auditar_pasta_pai(
                         status.append("VALOR")
                     item["Status"] = f"ERRO {'+'.join(status)} ❌"
 
+            else:
+                # XML existe, mas não existe no Excel base
+                item["Status"] = "SEM EXCEL ❌"
+                item["Obs"] = "XML encontrado, mas a nota não existe no Excel base."
+
+        elif info and not info.get("Nota"):
+            item["Status"] = "SEM NOTA ⚠️"
+            item["Obs"] = "XML parseado, mas não consegui extrair número da nota."
+
         relatorio.append(item)
+
+    # ============================================================
+    # NOTAS DO EXCEL QUE NÃO FORAM ENCONTRADAS EM NENHUM XML (SEM XML)
+    # ============================================================
+    notas_excel = set(df_base["NF_Clean"].dropna())
+    notas_xml = set(str(n).strip() for n in notas_xml_encontradas)
+    notas_faltando_xml = notas_excel - notas_xml
+
+    for nf in sorted(notas_faltando_xml):
+        match = df_base[df_base["NF_Clean"] == nf]
+        if match.empty:
+            continue
+        row = match.iloc[0]
+
+        vol_excel = safe_float(row.get("Vol_Excel", 0))
+        liq_excel = safe_float(row.get("Liq_Excel", 0))
+        icms_excel = safe_float(row.get("ICMS_Excel", 0))
+        pis_excel = safe_float(row.get("PIS_Excel", 0))
+        cof_excel = safe_float(row.get("COFINS_Excel", 0))
+
+        relatorio.append({
+            "Arquivo": "-",
+            "Empresa": "-",
+            "Tipo": "-",
+            "Mes": row.get("Mes", "-"),
+            "Nota": nf,
+            "Vol XML": 0.0,
+            "Bruto XML": 0.0,
+            "ICMS XML": 0.0,
+            "PIS": 0.0,
+            "COFINS": 0.0,
+            "Liq XML (Calc)": 0.0,
+            "Vol Excel": vol_excel,
+            "Liq Excel": liq_excel,
+            "ICMS Excel": icms_excel,
+            "PIS Excel": pis_excel,
+            "COFINS Excel": cof_excel,
+            "Diff Vol": "-",
+            "Diff R$": 0.0 - liq_excel,
+            "Status": "SEM XML ❌",
+            "Obs": "Nota consta no Excel, mas não foi localizado XML.",
+        })
 
     return gerar_relatorio(relatorio, saida=saida)
