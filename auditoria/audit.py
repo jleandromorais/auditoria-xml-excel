@@ -3,8 +3,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+import pandas as pd
+
 from .excel_loader import carregar_excel
-from .report import gerar_relatorio
+from .report import gerar_relatorio, gerar_relatorio_avisos
 from .utils import safe_float
 from .xml_parser import parse_xml_file
 
@@ -21,8 +23,7 @@ def coletar_xmls_por_empresas(pasta_pai: Path, empresas: List[Path]) -> List[Tup
         for extensao in ["*.xml", "*.XML"]:
             for arq in empresa_dir.rglob(extensao):
                 p = str(arq)
-                if p.lower() in vistos:
-                    continue
+                if p.lower() in vistos: continue
                 vistos.add(p.lower())
                 out.append((empresa_dir.name, p))
     out.sort(key=lambda t: (t[0].lower(), os.path.basename(t[1]).lower()))
@@ -39,45 +40,68 @@ def auditar_pasta_pai(
     if config is None:
         config = AuditConfig()
 
+    # 1. Carrega Excel Bruto
     df_base = carregar_excel(excel_path)
     if df_base.empty:
         raise RuntimeError("Não foi possível carregar os dados do Excel.")
 
-    # --- FILTRO DE MÊS ---
-    # Se um mês for passado (ex: "DEZ"), mantém apenas as notas desse mês do Excel
-    if mes_filtro:
-        mes_txt = str(mes_filtro).upper().strip()
-        df_base = df_base[df_base["Mes"].astype(str).str.upper().str.contains(mes_txt, na=False)].copy()
+    # 2. Aplica Filtro de Mês
+    if mes_filtro and str(mes_filtro).strip():
+        mes_busca = str(mes_filtro).upper().strip()
+        df_base = df_base[df_base["Mes"].astype(str).str.upper().str.contains(mes_busca, na=False)].copy()
         
         if df_base.empty:
-            raise RuntimeError(f"Nenhum dado encontrado no Excel para o mês: {mes_filtro}")
+            raise RuntimeError(f"Atenção: Não existem notas para o mês '{mes_filtro}' no Excel.")
 
     df_base["NF_Clean"] = df_base["NF_Clean"].astype(str).str.strip()
 
-    # 1) Agrupamento e Soma de XMLs
+    # ============================================================
+    # 2.5 CAPTURA DE DUPLICATAS (PARA O RELATÓRIO DE AVISO)
+    # ============================================================
+    # Antes de somar, verificamos quais notas aparecem mais de uma vez.
+    # keep=False marca TODAS as ocorrências da duplicata
+    df_duplicadas = df_base[df_base.duplicated(subset="NF_Clean", keep=False)].copy()
+
+    # ============================================================
+    # 3. AGRUPAMENTO (CORREÇÃO PARA O RELATÓRIO PRINCIPAL)
+    # ============================================================
+    cols_numericas = ["Vol_Excel", "Liq_Excel", "ICMS_Excel", "PIS_Excel", "COFINS_Excel"]
+    for c in cols_numericas:
+        if c in df_base.columns:
+            df_base[c] = pd.to_numeric(df_base[c], errors='coerce').fillna(0.0)
+
+    # Agrupa por Nota Fiscal para a auditoria funcionar corretamente
+    df_agrupado = df_base.groupby("NF_Clean", as_index=False).agg({
+        "Mes": "first",
+        "Vol_Excel": "sum",
+        "Liq_Excel": "sum",
+        "ICMS_Excel": "sum",
+        "PIS_Excel": "sum",
+        "COFINS_Excel": "sum"
+    })
+
+    # ============================================================
+    # 4. Leitura e Soma dos XMLs
+    # ============================================================
     xmls_arquivos = coletar_xmls_por_empresas(pasta_pai, empresas)
     xmls_agrupados: Dict[str, Dict] = {} 
 
     for empresa_nome, xml_path in xmls_arquivos:
         try:
             info = parse_xml_file(xml_path)
-        except Exception:
-            info = None
-
-        if not info or not info.get("Nota"):
+        except:
             continue
 
+        if not info or not info.get("Nota"): continue
         nota = str(info["Nota"]).strip()
         
         if nota not in xmls_agrupados:
             xmls_agrupados[nota] = {
-                "Empresa": empresa_nome,
-                "Tipo": info["Tipo"],
+                "Empresa": empresa_nome, "Tipo": info["Tipo"],
                 "Arquivos": [os.path.basename(xml_path)],
                 "Vol": 0.0, "Bruto": 0.0, "ICMS": 0.0, "PIS": 0.0, "COFINS": 0.0,
             }
         
-        # Soma valores (para casos de notas fracionadas em vários XMLs)
         xmls_agrupados[nota]["Vol"] += info.get("Vol", 0.0)
         xmls_agrupados[nota]["Bruto"] += info.get("Bruto", 0.0)
         xmls_agrupados[nota]["ICMS"] += info.get("ICMS", 0.0)
@@ -88,13 +112,16 @@ def auditar_pasta_pai(
         if nome_arq not in xmls_agrupados[nota]["Arquivos"]:
             xmls_agrupados[nota]["Arquivos"].append(nome_arq)
 
-    # 2) Comparação baseada no Excel (Referência Principal)
+    # ============================================================
+    # 5. Comparação Final (Excel Agrupado vs XML Agrupado)
+    # ============================================================
     relatorio: List[Dict] = []
+    notas_sem_xml: List[Dict] = [] # Lista separada para o relatório de aviso
     notas_xml_vistas = set()
 
-    for _, row in df_base.iterrows():
+    for _, row in df_agrupado.iterrows():
         nota_ex = str(row["NF_Clean"]).strip()
-        if not nota_ex or nota_ex == "NAN": continue
+        if not nota_ex or nota_ex.upper() == "NAN": continue
 
         vol_ex = safe_float(row.get("Vol_Excel", 0))
         liq_ex = safe_float(row.get("Liq_Excel", 0))
@@ -118,23 +145,20 @@ def auditar_pasta_pai(
                 "Vol XML": xml["Vol"], "Bruto XML": xml["Bruto"], "ICMS XML": xml["ICMS"]
             })
             
-            # Fallback PIS/COFINS para CT-e
-            pis_xml, cof_xml = xml["PIS"], xml["COFINS"]
-            if xml["Tipo"] == "CT-e" and pis_xml == 0 and (item["PIS Excel"] != 0):
-                pis_xml, cof_xml = item["PIS Excel"], item["COFINS Excel"]
-                item["Obs"] = "CT-e sem impostos no XML; usado Excel como fallback."
+            p_xml, c_xml = xml["PIS"], xml["COFINS"]
+            if xml["Tipo"] == "CT-e" and p_xml == 0 and item["PIS Excel"] != 0:
+                p_xml, c_xml = item["PIS Excel"], item["COFINS Excel"]
+                item["Obs"] = "CT-e: Usado impostos do Excel."
             
-            item["PIS"], item["COFINS"] = pis_xml, cof_xml
+            item["PIS"], item["COFINS"] = p_xml, c_xml
             
-            # Cálculo Líquido somado
             bruto = xml["Bruto"]
-            liq_calc = bruto - sum(v for v in (xml["ICMS"], pis_xml, cof_xml) if 0 < v < bruto)
+            liq_calc = bruto - sum(v for v in (xml["ICMS"], p_xml, c_xml) if 0 < v < bruto)
             item["Liq XML (Calc)"] = max(liq_calc, 0.0)
             
             item["Diff Vol"] = "-" if vol_ex == 0 else (xml["Vol"] - vol_ex)
             item["Diff R$"] = item["Liq XML (Calc)"] - liq_ex
 
-            # Validação
             tol = config.tolerancia_cte if xml["Tipo"] == "CT-e" else config.tolerancia_nfe
             v_ok = True if vol_ex == 0 else abs(float(item["Diff Vol"])) < config.tolerancia_volume
             f_ok = abs(item["Diff R$"]) < tol
@@ -149,16 +173,35 @@ def auditar_pasta_pai(
             item["Status"] = "SEM XML ❌"
             item["Diff R$"] = 0.0 - liq_ex
             item["Diff Vol"] = "-"
+            # Adiciona à lista de avisos
+            notas_sem_xml.append(item.copy())
 
         relatorio.append(item)
 
-    # 3) Notas que estão no XML mas NÃO no Excel
+    # XMLs sobrantes
     for nt, dados in xmls_agrupados.items():
         if nt not in notas_xml_vistas:
             relatorio.append({
                 "Nota": nt, "Status": "SEM EXCEL ❌", "Empresa": dados["Empresa"],
                 "Tipo": dados["Tipo"], "Vol XML": dados["Vol"], "Bruto XML": dados["Bruto"],
-                "Liq XML (Calc)": dados["Bruto"], "Arquivo": ", ".join(dados["Arquivos"])
+                "Liq XML (Calc)": dados["Bruto"], "Arquivo": ", ".join(dados["Arquivos"]),
+                "Mes": "-", "Liq Excel": 0, "Vol Excel": 0
             })
 
-    return gerar_relatorio(relatorio, saida=saida)
+    # --- GERAÇÃO DOS ARQUIVOS ---
+    
+    # 1. Relatório Principal (Resultado da Auditoria)
+    caminho_resultado = gerar_relatorio(relatorio, saida=saida)
+    
+    # 2. Relatório de Avisos (Duplicatas e Sem XML) - Só gera se houver algo para mostrar
+    caminho_avisos = ""
+    if not df_duplicadas.empty or notas_sem_xml:
+        caminho_avisos = gerar_relatorio_avisos(df_duplicadas, notas_sem_xml, caminho_resultado)
+        
+        # Abre o de avisos automaticamente também, se quiser
+        try:
+            os.startfile(caminho_avisos)
+        except:
+            pass
+
+    return f"{caminho_resultado}\n\n(AVISOS também gerado em: {os.path.basename(caminho_avisos)})" if caminho_avisos else caminho_resultado

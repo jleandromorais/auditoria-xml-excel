@@ -3,15 +3,15 @@ from tkinter import filedialog, messagebox
 from pathlib import Path
 from datetime import datetime
 
+# Ajuste o import conforme a estrutura da sua pasta
 from .audit import auditar_pasta_pai, coletar_xmls_por_empresas
-
 
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("Auditoria XML (pasta PAI -> empresas -> XMLs -> comparação Excel)")
-        self.geometry("900x600")
-        self.minsize(760, 520)
+        self.title("Auditoria XML (Soma XMLs -> Compara com Excel)")
+        self.geometry("900x650") 
+        self.minsize(760, 550)
 
         self.pasta_pai: Path | None = None
         self.excel_path: str | None = None
@@ -67,32 +67,28 @@ class App(tk.Tk):
         self.canvas.pack(side="left", fill="both", expand=True)
         self.scroll.pack(side="right", fill="y")
 
-        # ======== ABAIXO (EXCEL + DESTINO) ========
+        # ======== ABAIXO (EXCEL + MÊS + DESTINO) ========
         bottom = tk.Frame(self)
         bottom.pack(fill="x", padx=12, pady=10)
 
-        tk.Label(
-            bottom,
-            text="3) Escolha o Excel:",
-            font=("Segoe UI", 11, "bold"),
-        ).pack(anchor="w")
-
+        # -- Excel --
+        tk.Label(bottom, text="3) Escolha o Excel:", font=("Segoe UI", 11, "bold")).pack(anchor="w")
         linha_excel = tk.Frame(bottom)
         linha_excel.pack(fill="x", pady=6)
-
         tk.Button(linha_excel, text="Escolher Excel", command=self.escolher_excel).pack(side="left")
         self.lbl_excel = tk.Label(linha_excel, text="(não selecionado)", fg="gray")
         self.lbl_excel.pack(side="left", padx=10)
 
-        tk.Label(
-            bottom,
-            text="4) (Opcional) Pasta para salvar o relatório:",
-            font=("Segoe UI", 11, "bold"),
-        ).pack(anchor="w")
+        # -- Mês (NOVO CAMPO) --
+        tk.Label(bottom, text="4) Filtro de Mês (Opcional - Ex: DEZ):", font=("Segoe UI", 11, "bold")).pack(anchor="w", pady=(10, 0))
+        self.ent_mes = tk.Entry(bottom, width=10)
+        self.ent_mes.pack(anchor="w", pady=4)
+        tk.Label(bottom, text="(Se deixar vazio, processa todas as abas do Excel carregadas)", fg="gray", font=("Segoe UI", 9)).pack(anchor="w")
 
+        # -- Destino --
+        tk.Label(bottom, text="5) Pasta para salvar o relatório (Opcional):", font=("Segoe UI", 11, "bold")).pack(anchor="w", pady=(10, 0))
         linha_dest = tk.Frame(bottom)
         linha_dest.pack(fill="x", pady=6)
-
         tk.Button(linha_dest, text="Escolher pasta", command=self.escolher_destino).pack(side="left")
         self.lbl_dest = tk.Label(linha_dest, text="(Downloads por padrão)", fg="gray")
         self.lbl_dest.pack(side="left", padx=10)
@@ -145,7 +141,7 @@ class App(tk.Tk):
         subpastas.sort(key=lambda p: p.name.lower())
 
         if not subpastas:
-            tk.Label(self.frame_checks, text="Nenhuma subpasta (empresa) encontrada na pasta PAI.").pack(anchor="w")
+            tk.Label(self.frame_checks, text="Nenhuma subpasta encontrada na pasta PAI.").pack(anchor="w")
             self.status.config(text="Nenhuma empresa encontrada.")
             return
 
@@ -185,23 +181,17 @@ class App(tk.Tk):
         return [p for (p, var) in (v for v in self.empresas_vars.values()) if var.get()]
 
     def atualizar_preview_xmls(self):
-        """
-        Mostra no status quantos XMLs seriam encontrados com a seleção atual.
-        (Ajuda a dar confiança e evita 'tá travado?')
-        """
         if not self.pasta_pai or not self.empresas_vars:
             return
-
         empresas = self._empresas_selecionadas()
         if not empresas:
             self.status.config(text="Nenhuma empresa selecionada.")
             return
-
         try:
             xmls = coletar_xmls_por_empresas(self.pasta_pai, empresas)
             self.status.config(text=f"Prévia: {len(xmls)} XML(s) encontrados nas empresas selecionadas.")
         except Exception:
-            self.status.config(text="Prévia: não consegui contar os XMLs (mas a auditoria pode rodar).")
+            pass
 
     def rodar_auditoria(self):
         if not self.pasta_pai:
@@ -216,28 +206,33 @@ class App(tk.Tk):
             messagebox.showwarning("Atenção", "Selecione pelo menos uma empresa.")
             return
 
+        # Captura o Mês digitado
+        mes_digitado = self.ent_mes.get().strip()
+
         saida = None
         if self.destino_relatorio:
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
             saida = str(self.destino_relatorio / f"Auditoria_XML_{ts}.xlsx")
 
         try:
-            # 1) Conta XMLs antes (mostra no status)
-            xmls = coletar_xmls_por_empresas(self.pasta_pai, empresas)
-            total_xmls = len(xmls)
-
-            self.status.config(text=f"{total_xmls} XML(s) encontrados. Iniciando auditoria...")
+            self.status.config(text="Iniciando auditoria...")
             self.btn_auditar.config(state="disabled")
             self.update_idletasks()
 
-            # 2) Roda auditoria
-            out = auditar_pasta_pai(self.pasta_pai, empresas, self.excel_path, saida=saida)
+            # Passa o mes_filtro para a função
+            out = auditar_pasta_pai(
+                self.pasta_pai, 
+                empresas, 
+                self.excel_path, 
+                saida=saida,
+                mes_filtro=mes_digitado  # <--- AQUI ESTÁ A CORREÇÃO IMPORTANTE
+            )
 
-            self.status.config(text=f"Concluído! Relatório gerado: {out}")
-            messagebox.showinfo("Finalizado", f"Concluído!\n\nRelatório:\n{out}")
+            self.status.config(text=f"Concluído! Relatório: {out}")
+            messagebox.showinfo("Finalizado", f"Auditoria Concluída!\n\nMês Filtrado: {mes_digitado if mes_digitado else 'Todos'}\nArquivo: {out}")
 
         except Exception as e:
-            messagebox.showerror("Erro", str(e))
+            messagebox.showerror("Erro", f"Ocorreu um erro:\n{str(e)}")
             self.status.config(text="Erro ao auditar.")
         finally:
             self.btn_auditar.config(state="normal")
