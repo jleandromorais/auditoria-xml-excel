@@ -6,7 +6,8 @@ import pandas as pd
 from openpyxl.styles import PatternFill, Font, Alignment
 
 
-def gerar_relatorio(lista: List[Dict], saida: Optional[str] = None) -> str:
+def gerar_relatorio(lista: List[Dict], saida: Optional[str] = None, resumo: Optional[List[Dict]] = None) -> str:
+
     df = pd.DataFrame(lista)
 
     cols = [
@@ -53,6 +54,16 @@ def gerar_relatorio(lista: List[Dict], saida: Optional[str] = None) -> str:
         df.to_excel(writer, index=False, sheet_name="Resultado")
         ws = writer.sheets["Resultado"]
 
+         # ============================
+        # Aba 0: Resumo (Excel x XML por mês)
+        # ============================
+        if resumo:
+            df_resumo = pd.DataFrame(resumo)
+            cols_r = ["Mes", "Notas no Excel", "Notas com XML", "Notas sem XML"]
+            for c in cols_r:
+                if c not in df_resumo.columns:
+                    df_resumo[c] = 0
+            df_resumo[cols_r].to_excel(writer, index=False, sheet_name="Resumo")
         # ============================
         # Aba 1: Excel_sem_XML
         # ============================

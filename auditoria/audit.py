@@ -211,5 +211,24 @@ def auditar_pasta_pai(
             "Status": "SEM XML ❌",
             "Obs": "Nota consta no Excel, mas não foi localizado XML.",
         })
+                # ============================================================
+        # RESUMO por mês: quantas notas no Excel, quantas com XML, quantas sem XML
+        # ============================================================
+        df_un = df_base.drop_duplicates("NF_Clean").copy()
+        notas_por_mes = df_un.groupby("Mes")["NF_Clean"].apply(lambda s: set(s.dropna().astype(str).str.strip()))
 
-    return gerar_relatorio(relatorio, saida=saida)
+        resumo = []
+        for mes, notas_do_mes in notas_por_mes.items():
+            total_excel = len(notas_do_mes)
+            com_xml = len(notas_do_mes & notas_xml)
+            sem_xml = total_excel - com_xml
+            resumo.append({
+                "Mes": mes,
+                "Notas no Excel": total_excel,
+                "Notas com XML": com_xml,
+                "Notas sem XML": sem_xml,
+            })
+
+        return gerar_relatorio(relatorio, saida=saida, resumo=resumo)
+
+

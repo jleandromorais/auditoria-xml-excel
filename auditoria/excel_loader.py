@@ -54,8 +54,36 @@ def carregar_excel(caminho: str) -> pd.DataFrame:
         if not (c_nf and c_liq):
             continue
 
+        
         temp = df2.copy()
-        temp["NF_Clean"] = temp[c_nf].apply(limpar_numero_nf_bruto)
+
+        # ============================================================
+        # Correção para planilhas com células mescladas/linhas repetidas:
+        # Em muitos relatórios, o número da Nota Fiscal aparece só na 1ª linha
+        # e as linhas seguintes ficam "em branco" (visual), mas ainda fazem parte da mesma NF.
+        # Aqui, nós propagamos (ffill) a NF para as linhas vazias APENAS quando a linha tem
+        # valores relevantes (ex.: líquidos/volume/impostos), evitando preencher totais/linhas de separação.
+        # ============================================================
+        def _has_content(v) -> bool:
+            if pd.isna(v):
+                return False
+            s = str(v).strip()
+            return s != "" and s.upper() != "NAN"
+
+        nf_raw = temp[c_nf]
+        nf_norm = nf_raw.where(nf_raw.apply(_has_content), pd.NA)
+
+        cols_relevantes = [c for c in [c_liq, c_vol, c_icms, c_pis, c_cof] if c]
+        if cols_relevantes:
+            row_has_values = temp[cols_relevantes].applymap(_has_content).any(axis=1)
+        else:
+            row_has_values = pd.Series([True] * len(temp), index=temp.index)
+
+        nf_ffill = nf_norm.ffill()
+        nf_final = nf_norm.copy()
+        mask_preencher = nf_norm.isna() & row_has_values
+        nf_final.loc[mask_preencher] = nf_ffill.loc[mask_preencher]
+        temp["NF_Clean"] = nf_final.apply(limpar_numero_nf_bruto)
         temp["Vol_Excel"] = temp[c_vol].apply(to_float) if c_vol else 0.0
         temp["Liq_Excel"] = temp[c_liq].apply(to_float)
 
