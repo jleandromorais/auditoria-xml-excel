@@ -54,7 +54,6 @@ def carregar_excel(caminho: str) -> pd.DataFrame:
         if not (c_nf and c_liq):
             continue
 
-        
         temp = df2.copy()
 
         # ============================================================
@@ -75,7 +74,10 @@ def carregar_excel(caminho: str) -> pd.DataFrame:
 
         cols_relevantes = [c for c in [c_liq, c_vol, c_icms, c_pis, c_cof] if c]
         if cols_relevantes:
-            row_has_values = temp[cols_relevantes].applymap(_has_content).any(axis=1)
+            sub = temp[cols_relevantes]
+            # Substitui applymap (removido em versões novas do pandas)
+            mask = sub.apply(lambda col: col.map(_has_content))
+            row_has_values = mask.any(axis=1)
         else:
             row_has_values = pd.Series([True] * len(temp), index=temp.index)
 
@@ -83,6 +85,7 @@ def carregar_excel(caminho: str) -> pd.DataFrame:
         nf_final = nf_norm.copy()
         mask_preencher = nf_norm.isna() & row_has_values
         nf_final.loc[mask_preencher] = nf_ffill.loc[mask_preencher]
+
         temp["NF_Clean"] = nf_final.apply(limpar_numero_nf_bruto)
         temp["Vol_Excel"] = temp[c_vol].apply(to_float) if c_vol else 0.0
         temp["Liq_Excel"] = temp[c_liq].apply(to_float)

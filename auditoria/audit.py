@@ -205,3 +205,10 @@ def auditar_pasta_pai(
             pass
 
     return f"{caminho_resultado}\n\n(AVISOS também gerado em: {os.path.basename(caminho_avisos)})" if caminho_avisos else caminho_resultado
+    
+    caminho_resultado = gerar_relatorio(relatorio, saida=saida)
+    
+    # 2. Relatório de Avisos (Isso vai gerar a pasta AVISOS organizada)
+    caminho_avisos = ""
+    if not df_duplicadas.empty or notas_sem_xml:
+        caminho_avisos = gerar_relatorio_avisos(df_duplicadas, notas_sem_xml, caminho_resultado)
