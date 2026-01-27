@@ -5,9 +5,8 @@ from typing import List, Dict, Optional
 import pandas as pd
 from openpyxl.styles import PatternFill, Font, Alignment
 
-
 def gerar_relatorio(lista: List[Dict], saida: Optional[str] = None, resumo: Optional[List[Dict]] = None) -> str:
-
+    # Cria o DataFrame base com os resultados da auditoria
     df = pd.DataFrame(lista)
 
     cols = [
@@ -33,12 +32,34 @@ def gerar_relatorio(lista: List[Dict], saida: Optional[str] = None, resumo: Opti
         "Obs",
     ]
 
+    # Garante que todas as colunas necessárias existem
     for c in cols:
         if c not in df.columns:
             df[c] = "-"
 
-    df = df[cols]
+    # --- LÓGICA DE TOTAIS GERAIS ---
+    # Criar uma cópia para calcular somas numéricas sem afetar os dados originais
+    df_temp = df.copy()
+    
+    # Converter colunas numéricas (forçar erros para NaN e depois para 0)
+    cols_numericas = [
+        "Vol XML", "Vol Excel", "Bruto XML", "ICMS XML", "PIS", "COFINS",
+        "ICMS Excel", "PIS Excel", "COFINS Excel", "Liq XML (Calc)", "Liq Excel", "Diff R$"
+    ]
+    
+    for c in cols_numericas:
+        df_temp[c] = pd.to_numeric(df_temp[c], errors='coerce').fillna(0)
 
+    # Calcular somas
+    totais = {col: df_temp[col].sum() for col in cols_numericas}
+    totais["Arquivo"] = "TOTAIS GERAIS"
+    totais["Status"] = "---"
+    totais["Nota"] = "---"
+
+    # Adicionar a linha de total ao DataFrame principal
+    df = pd.concat([df[cols], pd.DataFrame([totais])], ignore_index=True)
+
+    # Configuração do caminho de saída
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     if saida is None:
         saida = os.path.join(
@@ -48,15 +69,11 @@ def gerar_relatorio(lista: List[Dict], saida: Optional[str] = None, resumo: Opti
         )
 
     with pd.ExcelWriter(saida, engine="openpyxl") as writer:
-        # ============================
-        # Aba principal
-        # ============================
+        # Aba Principal: Resultado
         df.to_excel(writer, index=False, sheet_name="Resultado")
         ws = writer.sheets["Resultado"]
 
-         # ============================
-        # Aba 0: Resumo (Excel x XML por mês)
-        # ============================
+        # Aba Resumo (Excel x XML por mês)
         if resumo:
             df_resumo = pd.DataFrame(resumo)
             cols_r = ["Mes", "Notas no Excel", "Notas com XML", "Notas sem XML"]
@@ -64,31 +81,21 @@ def gerar_relatorio(lista: List[Dict], saida: Optional[str] = None, resumo: Opti
                 if c not in df_resumo.columns:
                     df_resumo[c] = 0
             df_resumo[cols_r].to_excel(writer, index=False, sheet_name="Resumo")
-        # ============================
-        # Aba 1: Excel_sem_XML
-        # ============================
+
+        # Aba Excel_sem_XML
         df_excel_sem_xml = df[df["Status"].astype(str).str.contains(r"SEM XML", regex=True, na=False)].copy()
         if not df_excel_sem_xml.empty:
             cols1 = ["Nota", "Mes", "Liq Excel", "Vol Excel", "ICMS Excel", "PIS Excel", "COFINS Excel", "Status", "Obs"]
-            for c in cols1:
-                if c not in df_excel_sem_xml.columns:
-                    df_excel_sem_xml[c] = "-"
             df_excel_sem_xml[cols1].to_excel(writer, index=False, sheet_name="Excel_sem_XML")
 
-        # ============================
-        # Aba 2: XML_sem_Excel
-        # ============================
+        # Aba XML_sem_Excel
         df_xml_sem_excel = df[df["Status"].astype(str).str.contains(r"SEM EXCEL", regex=True, na=False)].copy()
         if not df_xml_sem_excel.empty:
             cols2 = ["Nota", "Empresa", "Tipo", "Bruto XML", "Liq XML (Calc)", "Vol XML", "ICMS XML", "PIS", "COFINS", "Status", "Obs", "Arquivo"]
-            for c in cols2:
-                if c not in df_xml_sem_excel.columns:
-                    df_xml_sem_excel[c] = "-"
             df_xml_sem_excel[cols2].to_excel(writer, index=False, sheet_name="XML_sem_Excel")
 
-        # ============================
-        # Estilo da aba Resultado
-        # ============================
+        # --- ESTILO E FORMATAÇÃO ---
+        # Cabeçalho
         header_fill = PatternFill("solid", fgColor="203764")
         header_font = Font(bold=True, color="FFFFFF")
         for cell in ws[1]:
@@ -98,29 +105,36 @@ def gerar_relatorio(lista: List[Dict], saida: Optional[str] = None, resumo: Opti
 
         verde = PatternFill("solid", fgColor="C6EFCE")
         vermelho = PatternFill("solid", fgColor="FFC7CE")
+        cinza_total = PatternFill("solid", fgColor="D3D3D3")
+        
+        status_col_idx = cols.index("Status")
+        max_row = ws.max_row
 
-        status_col = cols.index("Status") + 1
+        for row_idx, row in enumerate(ws.iter_rows(min_row=2), start=2):
+            status = str(row[status_col_idx].value)
+            
+            # Formatação especial para a linha de Total (última linha)
+            if row_idx == max_row:
+                for cell in row:
+                    cell.fill = cinza_total
+                    cell.font = Font(bold=True)
+            else:
+                # Cores baseadas no Status
+                cor = verde if "OK" in status else vermelho
+                for cell in row:
+                    cell.fill = cor
 
-        for row in ws.iter_rows(min_row=2):
-            status = str(row[status_col - 1].value)
-            cor = verde if "OK" in status else vermelho
-
+            # Formatação numérica
             for cell in row:
-                cell.fill = cor
-
                 if isinstance(cell.value, (int, float)):
-                    # dinheiro a partir de Bruto XML (inclui ICMS/PIS/COFINS, Liq, Diff)
+                    # Moeda
                     if cell.col_idx >= cols.index("Bruto XML") + 1:
                         cell.number_format = "R$ #,##0.00"
-
-                    # volumes
-                    if cell.col_idx in [
-                        cols.index("Vol XML") + 1,
-                        cols.index("Vol Excel") + 1,
-                        cols.index("Diff Vol") + 1,
-                    ]:
+                    # Volumes
+                    if cell.col_idx in [cols.index("Vol XML")+1, cols.index("Vol Excel")+1, cols.index("Diff Vol")+1]:
                         cell.number_format = "#,##0.000"
 
+        # Ajuste de largura das colunas
         for col in ws.columns:
             ws.column_dimensions[col[0].column_letter].width = 22
 
