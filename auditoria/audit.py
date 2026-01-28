@@ -10,6 +10,9 @@ from .report import gerar_relatorio, gerar_relatorio_avisos
 from .utils import safe_float
 from .xml_parser import parse_xml_file
 
+# <--- DB: Importa a classe de banco de dados
+from .database import AuditDB 
+
 @dataclass
 class AuditConfig:
     tolerancia_cte: float = 50.0
@@ -40,6 +43,11 @@ def auditar_pasta_pai(
     if config is None:
         config = AuditConfig()
 
+    # <--- DB: Inicializa o banco de dados
+    print("Inicializando banco de dados DuckDB...")
+    db = AuditDB()
+    db.inicializar()
+
     # 1. Carrega Excel Bruto
     df_base = carregar_excel(excel_path)
     if df_base.empty:
@@ -55,11 +63,12 @@ def auditar_pasta_pai(
 
     df_base["NF_Clean"] = df_base["NF_Clean"].astype(str).str.strip()
 
+    # <--- DB: Salva os dados do Excel filtrados no banco
+    db.salvar_excel(df_base)
+
     # ============================================================
     # 2.5 CAPTURA DE DUPLICATAS (PARA O RELATÓRIO DE AVISO)
     # ============================================================
-    # Antes de somar, verificamos quais notas aparecem mais de uma vez.
-    # keep=False marca TODAS as ocorrências da duplicata
     df_duplicadas = df_base[df_base.duplicated(subset="NF_Clean", keep=False)].copy()
 
     # ============================================================
@@ -85,6 +94,9 @@ def auditar_pasta_pai(
     # ============================================================
     xmls_arquivos = coletar_xmls_por_empresas(pasta_pai, empresas)
     xmls_agrupados: Dict[str, Dict] = {} 
+    
+    # <--- DB: Lista para armazenar todos os dados brutos dos XMLs para o banco
+    lista_dados_xml_brutos = []
 
     for empresa_nome, xml_path in xmls_arquivos:
         try:
@@ -93,6 +105,13 @@ def auditar_pasta_pai(
             continue
 
         if not info or not info.get("Nota"): continue
+        
+        # <--- DB: Adiciona info de arquivo e empresa para salvar no banco
+        info['Arquivo'] = os.path.basename(xml_path)
+        info['CaminhoCompleto'] = str(xml_path)
+        info['Empresa'] = empresa_nome
+        lista_dados_xml_brutos.append(info) # Guarda na lista
+
         nota = str(info["Nota"]).strip()
         
         if nota not in xmls_agrupados:
@@ -112,11 +131,14 @@ def auditar_pasta_pai(
         if nome_arq not in xmls_agrupados[nota]["Arquivos"]:
             xmls_agrupados[nota]["Arquivos"].append(nome_arq)
 
+    # <--- DB: Salva todos os XMLs processados no banco de uma vez
+    db.salvar_xmls(lista_dados_xml_brutos)
+
     # ============================================================
     # 5. Comparação Final (Excel Agrupado vs XML Agrupado)
     # ============================================================
     relatorio: List[Dict] = []
-    notas_sem_xml: List[Dict] = [] # Lista separada para o relatório de aviso
+    notas_sem_xml: List[Dict] = [] 
     notas_xml_vistas = set()
 
     for _, row in df_agrupado.iterrows():
@@ -173,7 +195,6 @@ def auditar_pasta_pai(
             item["Status"] = "SEM XML ❌"
             item["Diff R$"] = 0.0 - liq_ex
             item["Diff Vol"] = "-"
-            # Adiciona à lista de avisos
             notas_sem_xml.append(item.copy())
 
         relatorio.append(item)
@@ -188,27 +209,26 @@ def auditar_pasta_pai(
                 "Mes": "-", "Liq Excel": 0, "Vol Excel": 0
             })
 
+    # <--- DB: Salva o relatório final no DuckDB para BI
+    if relatorio:
+        db.salvar_relatorio_final(pd.DataFrame(relatorio))
+    
+    db.fechar()
+    # <--- Fim DB
+
     # --- GERAÇÃO DOS ARQUIVOS ---
     
     # 1. Relatório Principal (Resultado da Auditoria)
     caminho_resultado = gerar_relatorio(relatorio, saida=saida)
     
-    # 2. Relatório de Avisos (Duplicatas e Sem XML) - Só gera se houver algo para mostrar
+    # 2. Relatório de Avisos (Duplicatas e Sem XML)
     caminho_avisos = ""
     if not df_duplicadas.empty or notas_sem_xml:
         caminho_avisos = gerar_relatorio_avisos(df_duplicadas, notas_sem_xml, caminho_resultado)
         
-        # Abre o de avisos automaticamente também, se quiser
         try:
             os.startfile(caminho_avisos)
         except:
             pass
 
     return f"{caminho_resultado}\n\n(AVISOS também gerado em: {os.path.basename(caminho_avisos)})" if caminho_avisos else caminho_resultado
-    
-    caminho_resultado = gerar_relatorio(relatorio, saida=saida)
-    
-    # 2. Relatório de Avisos (Isso vai gerar a pasta AVISOS organizada)
-    caminho_avisos = ""
-    if not df_duplicadas.empty or notas_sem_xml:
-        caminho_avisos = gerar_relatorio_avisos(df_duplicadas, notas_sem_xml, caminho_resultado)
