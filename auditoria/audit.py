@@ -80,14 +80,19 @@ def auditar_pasta_pai(
             df_base[c] = pd.to_numeric(df_base[c], errors='coerce').fillna(0.0)
 
     # Agrupa por Nota Fiscal para a auditoria funcionar corretamente
-    df_agrupado = df_base.groupby("NF_Clean", as_index=False).agg({
+    agg_dict = {
         "Mes": "first",
         "Vol_Excel": "sum",
         "Liq_Excel": "sum",
         "ICMS_Excel": "sum",
         "PIS_Excel": "sum",
-        "COFINS_Excel": "sum"
-    })
+        "COFINS_Excel": "sum",
+    }
+    # Se o Excel trouxer uma coluna de Empresa, mantemos o nome "oficial" da planilha
+    if "Empresa" in df_base.columns:
+        agg_dict["Empresa"] = "first"
+
+    df_agrupado = df_base.groupby("NF_Clean", as_index=False).agg(agg_dict)
 
     # ============================================================
     # 4. Leitura e Soma dos XMLs
@@ -149,12 +154,18 @@ def auditar_pasta_pai(
         liq_ex = safe_float(row.get("Liq_Excel", 0))
 
         item: Dict = {
-            "Nota": nota_ex, "Mes": row.get("Mes", "-"),
-            "Vol Excel": vol_ex, "Liq Excel": liq_ex,
+            "Nota": nota_ex,
+            "Mes": row.get("Mes", "-"),
+            "Vol Excel": vol_ex,
+            "Liq Excel": liq_ex,
             "ICMS Excel": safe_float(row.get("ICMS_Excel", 0)),
             "PIS Excel": safe_float(row.get("PIS_Excel", 0)),
             "COFINS Excel": safe_float(row.get("COFINS_Excel", 0)),
-            "Status": "PENDENTE", "Obs": "", "Empresa": "-", "Tipo": "-", "Arquivo": "-"
+            "Empresa": row.get("Empresa", "-"),
+            "Status": "PENDENTE",
+            "Obs": "",
+            "Tipo": "-",
+            "Arquivo": "-",
         }
 
         if nota_ex in xmls_agrupados:
@@ -162,9 +173,12 @@ def auditar_pasta_pai(
             notas_xml_vistas.add(nota_ex)
 
             item.update({
-                "Empresa": xml["Empresa"], "Tipo": xml["Tipo"],
+                # Mantemos Empresa do Excel, e usamos tipo/arquivo/valores do XML
+                "Tipo": xml["Tipo"],
                 "Arquivo": ", ".join(xml["Arquivos"]),
-                "Vol XML": xml["Vol"], "Bruto XML": xml["Bruto"], "ICMS XML": xml["ICMS"]
+                "Vol XML": xml["Vol"],
+                "Bruto XML": xml["Bruto"],
+                "ICMS XML": xml["ICMS"],
             })
             
             p_xml, c_xml = xml["PIS"], xml["COFINS"]

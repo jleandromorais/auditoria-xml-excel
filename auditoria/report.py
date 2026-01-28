@@ -6,6 +6,8 @@ from openpyxl import Workbook
 from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 from openpyxl.utils.dataframe import dataframe_to_rows
 
+from .gemini_writer import gerar_texto_pdf_com_gemini
+
 # Tenta importar reportlab para PDF. Se não tiver, avisa no console.
 try:
     from reportlab.lib.pagesizes import letter
@@ -24,13 +26,28 @@ def gerar_relatorio(lista: List[Dict], saida: Optional[str] = None) -> str:
 
     df = pd.DataFrame(lista)
     
-    # Colunas padrão para garantir a ordem
+    # Colunas padrão para garantir a ordem no Excel:
+    # Arquivo, Tipo, Nota, Empresa, Volume, valores/impostos, diferenças, e só no final Status/Obs.
     cols_order = [
-        "Status", "Diff R$", "Nota", "Mes", "Empresa", "Tipo", 
-        "Vol Excel", "Vol XML", "Diff Vol",
-        "Liq Excel", "Liq XML (Calc)", "ICMS Excel", "ICMS XML", 
-        "PIS Excel", "PIS", "COFINS Excel", "COFINS", 
-        "Arquivo", "Obs"
+        "Arquivo",
+        "Tipo",
+        "Nota",
+        "Empresa",
+        "Mes",
+        "Vol Excel",
+        "Vol XML",
+        "Diff Vol",
+        "Liq Excel",
+        "Liq XML (Calc)",
+        "ICMS Excel",
+        "ICMS XML",
+        "PIS Excel",
+        "PIS",
+        "COFINS Excel",
+        "COFINS",
+        "Diff R$",
+        "Status",
+        "Obs",
     ]
     # Garante que todas colunas existem
     for c in cols_order:
@@ -212,29 +229,38 @@ def _gerar_pdf_resumo(caminho, df):
     c.drawString(60, y-30, f"Divergências de Valor/Vol: {erros}")
     c.drawString(60, y-45, f"Sem XML correspondente: {sem_xml}")
 
-    # A EXPLICAÇÃO QUE VOCÊ PEDIU
+    # TEXTO DO PDF (IA opcional com fallback)
     y -= 80
     c.setFont("Helvetica-Bold", 12)
-    c.drawString(50, y, "Nota Técnica: Discrepância (Excel > XML)")
-    
-    texto = [
-        "Foi observado que a planilha Excel ('Conta Gráfica') possui mais registros que a quantidade",
-        "de arquivos XML processados. Isso ocorre pelos seguintes motivos identificados:",
-        "",
-        "1. Notas de Débito (ND): O Excel contém lançamentos financeiros de ajustes (NDs) que",
-        "   não são Notas Fiscais eletrônicas e não possuem arquivo XML padrão.",
-        "2. Penalidades/Multas: Cobranças como 'Falha de Programação' são lançadas no Excel",
-        "   mas documentadas via boletos/PDFs simples, sem XML processável pelo sistema.",
-        "3. Documentos em PDF: O sistema auditou apenas arquivos .XML. Documentos salvos",
-        "   apenas como PDF não são contabilizados na coluna 'Vol XML'.",
-        "",
-        "Recomendação: Verifique a pasta 'AVISOS' gerada junto a este relatório para ver",
-        "a lista exata dos itens que constam no Excel mas não tiveram XML encontrado."
-    ]
+    c.drawString(50, y, "Resumo Executivo e Nota Técnica")
+
+    texto_ia = gerar_texto_pdf_com_gemini(df)
+    if texto_ia:
+        texto = texto_ia
+    else:
+        texto = [
+            "Foi observado que a planilha Excel ('Conta Gráfica') possui mais registros que a quantidade",
+            "de arquivos XML processados. Isso ocorre pelos seguintes motivos identificados:",
+            "",
+            "1. Notas de Débito (ND): O Excel contém lançamentos financeiros de ajustes (NDs) que",
+            "   não são Notas Fiscais eletrônicas e não possuem arquivo XML padrão.",
+            "2. Penalidades/Multas: Cobranças como 'Falha de Programação' são lançadas no Excel",
+            "   mas documentadas via boletos/PDFs simples, sem XML processável pelo sistema.",
+            "3. Documentos em PDF: O sistema auditou apenas arquivos .XML. Documentos salvos",
+            "   apenas como PDF não são contabilizados na coluna 'Vol XML'.",
+            "",
+            "Recomendação: Verifique a pasta 'AVISOS' gerada junto a este relatório para ver",
+            "a lista exata dos itens que constam no Excel mas não tiveram XML encontrado."
+        ]
     
     y -= 20
     c.setFont("Helvetica", 10)
     for linha in texto:
+        # Quebra de página simples
+        if y < 60:
+            c.showPage()
+            c.setFont("Helvetica", 10)
+            y = h - 60
         c.drawString(50, y, linha)
         y -= 15
 

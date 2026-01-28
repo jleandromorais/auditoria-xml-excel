@@ -17,3 +17,23 @@ dist/
 # OS/Editor
 .DS_Store
 .vscode/
+
+# venv
+.venv/
+venv/
+.env/
+
+# python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# builds
+build/
+dist/
+*.spec
+
+# logs
+*.log
+git rm -r --cached .venv

@@ -56,8 +56,15 @@ class AuditDB:
 
         df_final = df[list(colunas_map.keys())].rename(columns=colunas_map)
         
-        self.con.execute("INSERT INTO raw_xmls SELECT *, CURRENT_TIMESTAMP FROM df_final")
-        print(f"[DB] {len(df)} registos de XML salvos.")
+        # Insere só as 11 colunas; `importado_em` fica com o DEFAULT da tabela
+        self.con.execute("""
+            INSERT INTO raw_xmls (
+                chave, nota, data_emissao, emitente, cnpj_emitente,
+                valor_total, vol, icms, pis, cofins, arquivo_origem
+            )
+            SELECT * FROM df_final
+        """)
+        print(f"[DB] {len(df_final)} registros de XML salvos.")
 
     def salvar_excel(self, df_excel: pd.DataFrame):
         """Salva o DataFrame do Excel"""

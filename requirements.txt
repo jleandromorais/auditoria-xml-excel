@@ -2,4 +2,6 @@ pandas>=2.0
 openpyxl>=3.1
 pytest>=8.0
 pyinstaller>=6.0
-duckbd
+duckdb
+reportlab>=4.0
+python-dotenv>=1.0
