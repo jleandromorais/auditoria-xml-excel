@@ -90,7 +90,25 @@ def gerar_relatorio_avisos(df_duplicadas: pd.DataFrame, lista_sem_xml: List[Dict
     Gera um relatório de AVISOS (separado) bem formatado.
     """
     pasta = os.path.dirname(caminho_resultado)
-    nome_base = os.path.basename(caminho_resultado).replace("Resultado", "AVISOS")
+    nome_original = os.path.basename(caminho_resultado)
+
+    # Separa o nome da extensão (.xlsx)
+    nome, ext = os.path.splitext(nome_original)
+    
+    # --- CORREÇÃO: DEFINE O NOME ANTES DE USAR ---
+    if "Resultado" in nome:
+        nome_base = nome_original.replace("Resultado", "AVISOS")
+    else:
+        nome_base = f"{nome}_AVISOS{ext}"
+    # ---------------------------------------------
+
+    # --- ADICIONE ISTO AQUI: ---
+    if "Resultado" in nome:
+        nome_base = nome_original.replace("Resultado", "AVISOS")
+    else:
+        nome_base = f"{nome}_AVISOS{ext}"
+    # ---------------------------
+    
     caminho_avisos = os.path.join(pasta, "AVISOS", nome_base)
     
     # Cria pasta específica para avisos para ficar organizado
@@ -130,7 +148,11 @@ def gerar_relatorio_avisos(df_duplicadas: pd.DataFrame, lista_sem_xml: List[Dict
 
         _estilizar_planilha(ws2, cor_padrao="FFC7CE") # Vermelho claro para erros
 
-    wb.save(caminho_avisos)
+    try:
+        wb.save(caminho_avisos)
+    except PermissionError:
+        print(f"⚠️ AVISO: Não foi possível salvar '{caminho_avisos}' (Deve estar aberto).")
+
     return caminho_avisos
 
 def _estilizar_planilha(ws, cor_padrao=None):
