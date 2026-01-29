@@ -45,3 +45,9 @@ Conta Gráfica e Apuração de Custos (2).zip
 auditria/OUT/46. Outubro 2025.zip
 auditoria/NOV/47. Novembro 2025.zip
 auditoria/DEZ/48. Dezembro 2025.zip
+
+# Ignorar todos os arquivos Excel
+*.xlsx
+
+# Ignorar todos os arquivos ZIP dentro das pastas de auditoria
+auditoria/**/*.zip
